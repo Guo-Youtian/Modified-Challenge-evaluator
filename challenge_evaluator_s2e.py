@@ -128,6 +128,7 @@ class Modified_ChallengeEvaluator(object):
 
         # route calculate
         self.gps_route, self.route = self.calculate_route()
+        self.route_timeout = self.estimate_route_timeout()
 
 
 
@@ -173,7 +174,6 @@ class Modified_ChallengeEvaluator(object):
 
                 self.world = None
 
-
     def prepare_ego_car(self, start_transform):
         """
         Spawn or update all scenario actors according to
@@ -192,7 +192,6 @@ class Modified_ChallengeEvaluator(object):
         if self.agent_instance is not None:
             self.setup_sensors(self.agent_instance.sensors(), self.ego_vehicle)
 
-    
     def calculate_route(self):
         """
         This function calculate a route for giving starting_point and ending_point
@@ -338,12 +337,7 @@ class Modified_ChallengeEvaluator(object):
             settings.no_rendering_mode = True
         self.world.apply_settings(settings)
 
-        # update traffic lights to make traffic more dynamic
-        traffic_lights = self.world.get_actors().filter('*traffic_light*')
-        for tl in traffic_lights:
-            tl.set_green_time(9.0)
-            tl.set_yellow_time(0.05)
-            tl.set_red_time(0.08)
+
 
     def build_master_scenario(self, route, town_name, timeout=300):
         # We have to find the target.
@@ -365,20 +359,36 @@ class Modified_ChallengeEvaluator(object):
         return MasterScenario(self.world, self.ego_vehicle, master_scenario_configuration,
                                 timeout=timeout, debug_mode=self.debug > 1)
 
+
+    def estimate_route_timeout(self):
+        route_length = 0.0  # in meters
+
+        prev_point = self.route[0][0]
+        for current_point, _ in self.route[1:]:
+            dist = current_point.location.distance(prev_point.location)
+            route_length += dist
+            prev_point = current_point
+
+        return int(self.SECONDS_GIVEN_PER_METERS * route_length)
+
+
     def route_is_running(self):
         """
             Test if the route is still running.
         """
-        #  timeout
-        if self.within_available_time():
-            #  reach ending point
-            if self.reach_ending_point():
-                return False
-            else:
-                return True
+        if self.master_scenario is None:
+            raise ValueError('You should not run a route without a master scenario')
+        
+        # The scenario status can be: INVALID, RUNNING, SUCCESS, FAILURE. Only the last two
+        # indiciate that the scenario was running but terminated
+        # Therefore, return true when status is INVALID or RUNNING, false otherwise
+        if (self.master_scenario.scenario.scenario_tree.status == py_trees.common.Status.RUNNING or
+                self.master_scenario.scenario.scenario_tree.status == py_trees.common.Status.INVALID):
+            return True
         else:
             return False
-    
+
+
     def worldReset(self):
         """
         Reset the world
@@ -390,12 +400,10 @@ class Modified_ChallengeEvaluator(object):
         elevate_transform = self.route[0][0]
         elevate_transform.location.z += 0.5
         self.prepare_ego_car(elevate_transform)
-        
-        self.start_wall_time = datetime.datetime.now()
 
 
     def run_route(self, trajectory, no_master=False):
-        while self.route_is_running():
+        while no_master or self.route_is_running():
 
             CarlaDataProvider.on_carla_tick()
             # update all scenarios
@@ -483,9 +491,9 @@ class Modified_ChallengeEvaluator(object):
             sys.exit(-1)
 
                 # build the master scenario based on the route and the target.
-        self.master_scenario = self.build_master_scenario(_route_description['trajectory'],
-                                                          _route_description['town_name'],
-                                                          timeout=route_timeout)
+        self.master_scenario = self.build_master_scenario(self.route,
+                                                          args.map,
+                                                          timeout=self.route_timeout)
     
         while True:
             # reset
