@@ -1,5 +1,4 @@
 #!/usr/bin/env python
-# Copyright (c) 2018-2019 Intel Corporation.
 # authors: Guo Youtian
 #
 # This work is modified challenge evaluator_routes
@@ -26,6 +25,7 @@ from agents.navigation.global_route_planner_dao import GlobalRoutePlannerDAO
 
 import srunner.challenge.utils.route_configuration_parser as parser
 from srunner.challenge.autoagents.autonomous_agent import Track
+from srunner.scenariomanager.timer import GameTime
 from srunner.challenge.envs.scene_layout_sensors import SceneLayoutReader, ObjectFinder
 from srunner.challenge.envs.sensor_interface import CallBack, CANBusSensor, HDMapReader
 from srunner.scenariomanager.carla_data_provider import CarlaActorPool, CarlaDataProvider
@@ -404,11 +404,13 @@ class Modified_ChallengeEvaluator(object):
 
     def run_route(self, trajectory, no_master=False):
         while no_master or self.route_is_running():
-
+            # update all scenarios
+            GameTime.on_carla_tick(self.timestamp)
             CarlaDataProvider.on_carla_tick()
             # update all scenarios
-
             ego_action = self.agent_instance()
+            for scenario in self.list_scenarios:
+                scenario.scenario.scenario_tree.tick_once()
             
 
             if self.debug > 1:
@@ -494,10 +496,16 @@ class Modified_ChallengeEvaluator(object):
         self.master_scenario = self.build_master_scenario(self.route,
                                                           args.map,
                                                           timeout=self.route_timeout)
-    
+        
+        self.list_scenarios.append(self.master_scenario)
+
+        # need to modified to the condition of covergence of RL algorithm !!!
         while True:
             # reset
             self.worldReset()
+
+            for scenario in self.list_scenarios:
+                scenario.scenario.scenario_tree.tick_once()
 
             # main loop!
             self.run_route(self.route)
